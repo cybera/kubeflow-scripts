@@ -16,6 +16,7 @@ brew update && brew install azure-cli
 brew install source-to-image
 brew install ksonnet/tap/ks
 brew install kubernetes-cli
+brew install kubernetes-helm
 pip3 install https://storage.googleapis.com/ml-pipeline/release/0.1.12/kfp.tar.gz --upgrade
 ```
 

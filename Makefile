@@ -1,13 +1,28 @@
 CURDIR := $(shell pwd)
 
+check-checkpoint:
+ifndef CHECKPOINT
+	$(error CHECKPOINT is required)
+endif
+
 check-docker-username:
 ifndef DOCKER_USERNAME
 	$(error DOCKER_USERNAME is required)
 endif
 
+check-model-path:
+ifndef MODEL_PATH
+	$(error MODEL_PATH is required)
+endif
+
 check-name:
 ifndef NAME
 	$(error NAME is required)
+endif
+
+check-pvc:
+ifndef PVC
+	$(error PVC is required)
 endif
 
 check-tag:
@@ -32,11 +47,26 @@ azure/teardown:
 azure/teardown/nowait:
 	bash build/azure-k8s-teardown.sh $(NAME) no-wait
 
+k8s/logs: check-name
+	kubectl -n kubeflow logs $(NAME)
+
+k8s/jobs:
+	kubectl -n kubeflow get jobs
+
 k8s/nodes/gpu:
 	kubectl get nodes "-o=custom-columns=NAME:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu"
 
+k8s/pod: check-name
+	kubectl -n kubeflow describe pod $(NAME)
+
 k8s/pods:
 	kubectl -n kubeflow get pods
+
+k8s/tfjob: check-name
+	kubectl -n kubeflow describe tfjobs $(NAME)
+
+k8s/tfjobs:
+	kubectl -n kubeflow get tfjobs
 
 kubeflow/examples/download:
 	git clone https://github.com/cybera/kubeflow-examples examples
@@ -61,7 +91,20 @@ forward/dashboard:
 forward/argo:
 	kubectl -n kubeflow port-forward svc/argo-ui 8080:80
 
-example1/model/download: check-name
+forward/tf: check-name
+	kubectl -n kubeflow port-forward svc/$(NAME) 8000:8000
+
+tf/serve: check-name check-model-path check-pvc
+	cd $(CURDIR)/kf/ks_app ; \
+	ks generate tf-serving $(NAME) --name $(NAME) ; \
+	ks param set $(NAME) modelPath "/mnt/$(MODEL_PATH)" ; \
+	ks param set $(NAME) modelStorageType "nfs" ; \
+	ks param set $(NAME) numGpus 1  ; \
+	ks param set $(NAME) nfsPVC $(PVC) ; \
+	ks param set $(NAME) deployHttpProxy true
+	ks apply default -c $(NAME)
+
+github/model/download: check-name
 	PODNAME=$(shell kubectl get pods --namespace=kubeflow --selector="notebook-name=$(NAME)" --output=template --template="{{with index .items 0}}{{.metadata.name}}{{end}}") ; \
 	cd $(CURDIR)/examples/github_issue_summarization/notebooks ; \
 	echo $$PODNAME ; \
@@ -69,25 +112,97 @@ example1/model/download: check-name
 	kubectl --namespace=kubeflow cp $$PODNAME:/home/jovyan/examples/github_issue_summarization/notebooks/body_pp.dpkl . ; \
 	kubectl --namespace=kubeflow cp $$PODNAME:/home/jovyan/examples/github_issue_summarization/notebooks/title_pp.dpkl .
 
-example1/model/build-image: check-docker-username check-tag
+github/model/build-image: check-docker-username check-tag
 	cd $(CURDIR)/examples/github_issue_summarization/notebooks ; \
 	make build-model-image PROJECT=$(DOCKER_USERNAME) TAG=$(TAG)
 
-example1/model/push-image: check-docker-username check-tag
+github/model/push-image: check-docker-username check-tag
 	docker push $(DOCKER_USERNAME)/issue-summarization-model:$(TAG)
 
-example1/model/serve-image: check-docker-username check-tag
+github/model/serve-image: check-docker-username check-tag
 	cd $(CURDIR)/kf/ks_app ; \
 	ks generate seldon-serve-simple-v1alpha2 issue-summarization-model --name=issue-summarization --image=$(DOCKER_USERNAME)/issue-summarization-model:$(TAG) --replicas=1 ; \
 	ks apply default -c issue-summarization-model
 
-example1/ui/build: check-token
-	SERVER="$(shell grep server: kf/ks_app/app.yaml | sed -e 's/^[[:space:]]*//')"  ; \
+github/ui/build: check-token check-docker-username
 	cd $(CURDIR)/examples/github_issue_summarization/docker ; \
-	docker build -t jtopjian/issue-summarization-ui:0.1 . ; \
-	docker push jtopjian/issue-summarization-ui:0.1 ; \
+	docker build -t $(DOCKER_USERNAME)/issue-summarization-ui:0.1 . ; \
+	docker push $(DOCKER_USERNAME)/issue-summarization-ui:0.1 ; \
 	cd ../ks_app ; \
-	sed -i -e "s,server: .*,$$SERVER," app.yaml ; \
+	ks env add default --context=$(kubectl config current-context) ; \
+	ks env set default --namespace kubeflow ; \
 	ks param set ui github_token $(TOKEN) ; \
 	ks param set ui modelUrl "http://issue-summarization.kubeflow.svc.cluster.local:8000/api/v0.1/predictions" ; \
 	ks apply default -c ui
+
+pets/pvc/create:
+	cd $(CURDIR)/examples/object_detection/ks-app ; \
+	ks env add default --context=$(kubectl config current-context) ; \
+	ks env set default --namespace kubeflow ; \
+	ks param set pets-pvc accessMode "ReadWriteMany" ; \
+	ks param set pets-pvc storage "21Gi" ; \
+	ks apply default -c pets-pvc
+
+pets/data/create:
+	cd $(CURDIR)/examples/object_detection/ks-app ; \
+	ks param set get-data-job mountPath "/pets_data" ; \
+	ks param set get-data-job pvc "pets-pvc" ; \
+	ks param set get-data-job urlData "http://www.robots.ox.ac.uk/~vgg/data/pets/data/images.tar.gz" ; \
+	ks param set get-data-job urlAnnotations "http://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz" ; \
+	ks param set get-data-job urlModel "http://download.tensorflow.org/models/object_detection/faster_rcnn_resnet101_coco_2018_01_28.tar.gz" ; \
+	ks param set get-data-job urlPipelineConfig "https://raw.githubusercontent.com/kubeflow/examples/master/object_detection/conf/faster_rcnn_resnet101_pets.config" ; \
+	ks apply default -c get-data-job
+
+pets/data/decompress:
+	cd $(CURDIR)/examples/object_detection/ks-app ; \
+	ks param set decompress-data-job mountPath "/pets_data" ; \
+	ks param set decompress-data-job pvc "pets-pvc" ; \
+	ks param set decompress-data-job pathToAnnotations "/pets_data/annotations.tar.gz" ; \
+	ks param set decompress-data-job pathToDataset "/pets_data/images.tar.gz" ; \
+	ks param set decompress-data-job pathToModel "/pets_data/faster_rcnn_resnet101_coco_2018_01_28.tar.gz" ; \
+	ks apply default -c decompress-data-job
+
+pets/data/record:
+	cd $(CURDIR)/examples/object_detection/ks-app ; \
+	ks param set create-pet-record-job image "lcastell/pets_object_detection" ; \
+	ks param set create-pet-record-job dataDirPath "/pets_data" ; \
+	ks param set create-pet-record-job outputDirPath "/pets_data" ; \
+	ks param set create-pet-record-job mountPath "/pets_data" ; \
+	ks param set create-pet-record-job pvc "pets-pvc" ; \
+	ks apply default -c create-pet-record-job
+
+pets/tf/image: check-docker-username
+	cd $(CURDIR)/examples/object_detection/docker ; \
+	docker build --pull -t $(DOCKER_USERNAME)/pets_object_detection -f ./Dockerfile.training . ; \
+	docker push $(DOCKER_USERNAME)/pets_object_detection
+
+pets/tf/deploy:
+	cd $(CURDIR)/examples/object_detection/ks-app ; \
+	ks param set tf-training-job image "lcastell/pets_object_detection" ; \
+	ks param set tf-training-job mountPath "/pets_data" ; \
+	ks param set tf-training-job pvc "pets-pvc" ; \
+	ks param set tf-training-job numPs 1 ; \
+	ks param set tf-training-job numWorkers 1 ; \
+	ks param set tf-training-job pipelineConfigPath "/pets_data/faster_rcnn_resnet101_pets.config" ; \
+	ks param set tf-training-job trainDir "/pets_data/train" ; \
+	ks param set tf-training-job numGpu 1 ; \
+	ks apply default -c tf-training-job
+
+pets/tf/delete:
+	cd $(CURDIR)/examples/object_detection/ks-app ; \
+	ks delete default -c tf-training-job
+
+pets/model/export: check-checkpoint
+	cd $(CURDIR)/examples/object_detection/ks-app ; \
+	ks param set export-tf-graph-job mountPath "/pets_data" ; \
+	ks param set export-tf-graph-job pvc "pets-pvc" ; \
+	ks param set export-tf-graph-job image "lcastell/pets_object_detection" ; \
+	ks param set export-tf-graph-job pipelineConfigPath "/pets_data/faster_rcnn_resnet101_pets.config" ; \
+	ks param set export-tf-graph-job trainedCheckpoint "/pets_data/train/$(CHECKPOINT)" ; \
+	ks param set export-tf-graph-job outputDir "/pets_data/exported_graphs/1" ; \
+	ks param set export-tf-graph-job inputType "image_tensor" ; \
+	ks apply default -c export-tf-graph-job
+
+pets/model/predict: check-name
+	cd $(CURDIR)/examples/object_detection/serving_script ; \
+		python predict.py --url=

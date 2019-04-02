@@ -32,6 +32,9 @@ ks pkg install kubeflow/seldon
 ks generate seldon seldon
 ks apply default -c seldon
 
+# Install TFJob
+ks apply default -c tf-job-operator
+
 # Configure PVC
 kubectl -n kubeflow create -f ${KUBEFLOW_SRC}/../build/storage/azurefile.yml
 
