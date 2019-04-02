@@ -66,4 +66,5 @@ make azure/teardown NAME=jdoe
 
 ## Next
 
-Do the [Github Summarization exercise](https://github.com/cybera/kubeflow-examples/blob/cybera-modifications/github_issue_summarization/01_setup_a_kubeflow_cluster.md)
+* [Github Summarization exercise](https://github.com/cybera/kubeflow-examples/blob/cybera-modifications/github_issue_summarization/01_setup_a_kubeflow_cluster.md)
+* [Object Detection exercise](https://github.com/cybera/kubeflow-examples/blob/cybera-modifications/object_detection/setup.md)
