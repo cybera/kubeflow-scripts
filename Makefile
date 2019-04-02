@@ -69,9 +69,9 @@ k8s/tfjobs:
 	kubectl -n kubeflow get tfjobs
 
 kubeflow/examples/download:
-	git clone https://github.com/cybera/kubeflow-examples examples
-	cd examples
-	git checkout --track cybera-modifications
+	git clone https://github.com/cybera/kubeflow-examples examples ; \
+	cd examples ; \
+	git checkout cybera-modifications
 
 kubeflow/download:
 	bash build/kubeflow-download.sh
