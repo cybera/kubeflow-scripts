@@ -4,7 +4,7 @@ if [[ -n $1 ]]; then
 fi
 
 az group create -n $name -l westus2
-az aks create --node-vm-size Standard_NC6 --resource-group $name --name $name --node-count 3 --kubernetes-version 1.12.5 --location "West US 2" --generate-ssh-keys
+az aks create --node-vm-size Standard_NC6 --resource-group $name --name $name --node-count 3 --location "West US 2" --generate-ssh-keys
 rm ~/.kube/config || true
 az aks get-credentials --name $name --resource-group $name
 kubectl apply -f https://raw.githubusercontent.com/nvidia/k8s-device-plugin/v1.12/nvidia-device-plugin.yml
