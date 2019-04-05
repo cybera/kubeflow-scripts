@@ -50,6 +50,9 @@ azure/teardown/nowait:
 k8s/logs: check-name
 	kubectl -n kubeflow logs $(NAME)
 
+k8s/logs/f: check-name
+	kubectl -n kubeflow logs -f $(NAME)
+
 k8s/jobs:
 	kubectl -n kubeflow get jobs
 
@@ -61,6 +64,9 @@ k8s/pod: check-name
 
 k8s/pods:
 	kubectl -n kubeflow get pods
+
+k8s/pods/gpus:
+	kubectl -n kubeflow get pods "-o=custom-columns=NAME:.metadata.name,GPU:.spec.containers.*.resources.limits.nvidia\.com/gpu"
 
 k8s/tfjob: check-name
 	kubectl -n kubeflow describe tfjobs $(NAME)
@@ -101,11 +107,11 @@ tf/serve: check-name check-model-path check-pvc
 	ks param set $(NAME) modelStorageType "nfs" ; \
 	ks param set $(NAME) numGpus 1  ; \
 	ks param set $(NAME) nfsPVC $(PVC) ; \
-	ks param set $(NAME) deployHttpProxy true
+	ks param set $(NAME) deployHttpProxy true ; \
 	ks apply default -c $(NAME)
 
-github/model/download: check-name
-	PODNAME=$(shell kubectl get pods --namespace=kubeflow --selector="notebook-name=$(NAME)" --output=template --template="{{with index .items 0}}{{.metadata.name}}{{end}}") ; \
+github/model/download:
+	PODNAME=$(shell kubectl get pods --namespace=kubeflow --selector="app=jupyterhub" --output=template --template="{{with index .items 0}}{{.metadata.name}}{{end}}") ; \
 	cd $(CURDIR)/examples/github_issue_summarization/notebooks ; \
 	echo $$PODNAME ; \
 	kubectl --namespace=kubeflow cp $$PODNAME:/home/jovyan/examples/github_issue_summarization/notebooks/seq2seq_model_tutorial.h5 . ; \
@@ -124,20 +130,29 @@ github/model/serve-image: check-docker-username check-tag
 	ks generate seldon-serve-simple-v1alpha2 issue-summarization-model --name=issue-summarization --image=$(DOCKER_USERNAME)/issue-summarization-model:$(TAG) --replicas=1 ; \
 	ks apply default -c issue-summarization-model
 
-github/ui/build: check-token check-docker-username
+github/model/forward:
+	kubectl -n kubeflow port-forward svc/issue-summarization 8080:8000
+
+github/ui/build: check-token
 	cd $(CURDIR)/examples/github_issue_summarization/docker ; \
-	docker build -t $(DOCKER_USERNAME)/issue-summarization-ui:0.1 . ; \
-	docker push $(DOCKER_USERNAME)/issue-summarization-ui:0.1 ; \
 	cd ../ks_app ; \
+	rm app.yaml ; \
+	echo "apiVersion: 0.3.0" > app.yaml ; \
+	echo "kind: ksonnet.io/app" >> app.yaml ; \
 	ks env add default --context=$(kubectl config current-context) ; \
 	ks env set default --namespace kubeflow ; \
 	ks param set ui github_token $(TOKEN) ; \
 	ks param set ui modelUrl "http://issue-summarization.kubeflow.svc.cluster.local:8000/api/v0.1/predictions" ; \
 	ks apply default -c ui
 
+github/ui/forward:
+	kubectl -n kubeflow port-forward svc/issue-summarization-ui 8080:80
+
 pets/pvc/create:
 	cd $(CURDIR)/examples/object_detection/ks-app ; \
-	ks env add default --context=$(kubectl config current-context) ; \
+	rm app.yaml ; \
+	wget https://raw.githubusercontent.com/kubeflow/examples/master/object_detection/ks-app/app.yaml ; \
+	ks env add default --context=$(shell kubectl config current-context) ; \
 	ks env set default --namespace kubeflow ; \
 	ks param set pets-pvc accessMode "ReadWriteMany" ; \
 	ks param set pets-pvc storage "21Gi" ; \
@@ -199,10 +214,11 @@ pets/model/export: check-checkpoint
 	ks param set export-tf-graph-job image "lcastell/pets_object_detection" ; \
 	ks param set export-tf-graph-job pipelineConfigPath "/pets_data/faster_rcnn_resnet101_pets.config" ; \
 	ks param set export-tf-graph-job trainedCheckpoint "/pets_data/train/$(CHECKPOINT)" ; \
-	ks param set export-tf-graph-job outputDir "/pets_data/exported_graphs/1" ; \
+	ks param set export-tf-graph-job outputDir "/pets_data/exported_graphs" ; \
 	ks param set export-tf-graph-job inputType "image_tensor" ; \
 	ks apply default -c export-tf-graph-job
 
-pets/model/predict: check-name
-	cd $(CURDIR)/examples/object_detection/serving_script ; \
-		python predict.py --url=
+pets/model/move:
+	kubectl -n kubeflow exec tf-training-job-master-0 -- mkdir /pets_data/exported_graphs/1
+	kubectl -n kubeflow exec tf-training-job-master-0 -- mv /pets_data/exported_graphs/saved_model/saved_model.pb /pets_data/exported_graphs/1
+	kubectl -n kubeflow exec tf-training-job-master-0 -- mv /pets_data/exported_graphs/saved_model/variables /pets_data/exported_graphs/1
